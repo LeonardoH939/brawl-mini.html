@@ -1,0 +1,109 @@
+name: Build PocketLinux 1.0.2 from UserLAnd
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - linux-pocket-build
+    paths:
+      - '.github/workflows/build-pocketlinux-userland.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install build tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "build-tools;35.0.0"
+
+      - name: Download UserLAnd F-Droid APK and apktool
+        run: |
+          curl -L --fail --retry 3 -o userland.apk https://f-droid.org/repo/tech.ula_7438725.apk
+          curl -L --fail --retry 3 -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.10.0/apktool_2.10.0.jar
+          ls -lh userland.apk apktool.jar
+
+      - name: Decode APK
+        run: |
+          java -jar apktool.jar d -f userland.apk -o decoded
+
+      - name: Rebrand as PocketLinux
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("decoded")
+
+          # Change user-facing application name without changing the proven package/runtime paths.
+          for p in root.glob("res/values*/strings.xml"):
+              try:
+                  s = p.read_text(encoding="utf-8")
+              except Exception:
+                  continue
+              s = re.sub(r'(<string[^>]+name="app_name"[^>]*>)(.*?)(</string>)',
+                         r'\1PocketLinux\3', s, flags=re.S)
+              s = s.replace(">UserLAnd<", ">PocketLinux<")
+              s = s.replace(">Welcome to UserLAnd<", ">Bem-vindo ao PocketLinux<")
+              p.write_text(s, encoding="utf-8")
+
+          # Set a clear local version label.
+          yml = root / "apktool.yml"
+          s = yml.read_text(encoding="utf-8")
+          s = re.sub(r'versionName:\s*.*', 'versionName: 1.0.2', s)
+          yml.write_text(s, encoding="utf-8")
+
+          # Add a simple attribution file to the repackaged APK assets.
+          assets = root / "assets"
+          assets.mkdir(exist_ok=True)
+          (assets / "POCKETLINUX-NOTICE.txt").write_text(
+              "PocketLinux 1.0.2 is based on UserLAnd by UserLAnd Technologies.\n"
+              "UserLAnd is distributed under the MIT License.\n"
+              "Source: https://github.com/CypherpunkArmory/UserLAnd\n",
+              encoding="utf-8"
+          )
+          PY
+
+      - name: Rebuild APK
+        run: |
+          java -jar apktool.jar b decoded --use-aapt2 -o PocketLinux-unsigned.apk
+
+      - name: Create signing key
+        run: |
+          keytool -genkeypair -v             -keystore pocketlinux.keystore             -storepass pocketlinux             -keypass pocketlinux             -alias pocketlinux             -keyalg RSA             -keysize 2048             -validity 10000             -dname "CN=PocketLinux,O=PocketLinux,C=BR"
+
+      - name: Align and sign
+        run: |
+          ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$ZIPALIGN" -f 4 PocketLinux-unsigned.apk PocketLinux-aligned.apk
+          "$APKSIGNER" sign             --ks pocketlinux.keystore             --ks-pass pass:pocketlinux             --key-pass pass:pocketlinux             --out PocketLinux-1.0.2.apk             PocketLinux-aligned.apk
+          "$APKSIGNER" verify --verbose --print-certs PocketLinux-1.0.2.apk
+          sha256sum PocketLinux-1.0.2.apk > PocketLinux-1.0.2.sha256
+          ls -lh PocketLinux-1.0.2.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketLinux-1.0.2
+          path: |
+            PocketLinux-1.0.2.apk
+            PocketLinux-1.0.2.sha256
+          if-no-files-found: error
+          retention-days: 7
