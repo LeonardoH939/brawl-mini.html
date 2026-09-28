@@ -29,10 +29,10 @@ jobs:
         with:
           packages: platform-tools
 
-      - name: Install Android SDK 30
+      - name: Install Android SDK and compatible NDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-30" "build-tools;30.0.3"
+          sdkmanager "platforms;android-29" "platforms;android-30" "build-tools;29.0.3" "build-tools;30.0.3" "ndk;20.1.5948944"
 
       - name: Set up Java 8 for legacy Android build
         uses: actions/setup-java@v5
@@ -106,9 +106,15 @@ jobs:
           """)
           PY
 
+      - name: Configure legacy NDK
+        working-directory: PocketLinux
+        run: |
+          printf "sdk.dir=%s\nndk.dir=%s\n" "$ANDROID_HOME" "$ANDROID_HOME/ndk/20.1.5948944" > local.properties
+
       - name: Build debug APK
         working-directory: PocketLinux
         run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/20.1.5948944"
           chmod +x gradlew
           ./gradlew --no-daemon clean assembleDebug --stacktrace
 
