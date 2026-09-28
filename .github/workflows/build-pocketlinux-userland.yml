@@ -98,6 +98,31 @@ jobs:
           sha256sum PocketLinux-1.0.2.apk > PocketLinux-1.0.2.sha256
           ls -lh PocketLinux-1.0.2.apk
 
+      - name: Smoke test on Android 13
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          arch: x86_64
+          target: default
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            adb install -r PocketLinux-1.0.2.apk
+            adb logcat -c
+            adb shell am force-stop tech.ula || true
+            adb shell monkey -p tech.ula -c android.intent.category.LAUNCHER 1
+            sleep 12
+            PID="$(adb shell pidof tech.ula | tr -d '\r')"
+            echo "PocketLinux PID: $PID"
+            if [ -z "$PID" ]; then
+              echo "PocketLinux did not remain running."
+              adb logcat -d -v threadtime | grep -E -i "FATAL EXCEPTION|AndroidRuntime|Process: tech.ula|tech.ula" | tail -n 250 || true
+              exit 1
+            fi
+            echo "PocketLinux remained alive after launch on Android 13."
+            adb shell dumpsys activity activities | grep -E "mResumedActivity|tech.ula" | head -n 20 || true
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
