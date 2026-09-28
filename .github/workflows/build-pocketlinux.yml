@@ -1,0 +1,115 @@
+name: Build PocketLinux APK
+
+on:
+  push:
+    branches:
+      - linux-pocket-build
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Set up Java 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Install Android SDK 30
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-30" "build-tools;30.0.3"
+
+      - name: Fetch GPLv3 Linux runtime app
+        run: |
+          git clone --depth=1 https://github.com/Lord1Egypt/ProotX.git PocketLinux
+
+      - name: Apply PocketLinux branding and Android identity
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("PocketLinux")
+          gradle = root / "app/build.gradle"
+          txt = gradle.read_text()
+          txt = txt.replace('applicationId "io.github.lord1egypt.prootx"', 'applicationId "com.pocketlinux.mobile"')
+          txt = txt.replace('versionName "1.0.0"', 'versionName "1.0.0-pocket"')
+          gradle.write_text(txt)
+
+          manifest = root / "app/src/main/AndroidManifest.xml"
+          txt = manifest.read_text()
+          txt = txt.replace('android:authorities="io.github.lord1egypt.prootx.documents"',
+                            'android:authorities="com.pocketlinux.mobile.documents"')
+          manifest.write_text(txt)
+
+          strings = root / "app/src/main/res/values/strings.xml"
+          txt = strings.read_text()
+          txt = txt.replace('ProotX', 'PocketLinux')
+          txt = txt.replace('Welcome to PocketLinux!', 'Bem-vindo ao PocketLinux!')
+          strings.write_text(txt)
+
+          # Portuguese-Brazil essentials; untranslated strings fall back to upstream English.
+          pt = root / "app/src/main/res/values-pt-rBR"
+          pt.mkdir(parents=True, exist_ok=True)
+          (pt / "strings.xml").write_text("""<resources>
+              <string name="app_name">PocketLinux</string>
+              <string name="welcome">Bem-vindo ao PocketLinux!</string>
+              <string name="apps">Aplicativos</string>
+              <string name="sessions">Sessões</string>
+              <string name="filesystems">Sistemas Linux</string>
+              <string name="settings">Configurações</string>
+              <string name="help">Ajuda</string>
+              <string name="button_continue">Continuar</string>
+              <string name="save">Salvar</string>
+              <string name="add">Adicionar</string>
+              <string name="delete">Excluir</string>
+              <string name="refresh">Atualizar</string>
+              <string name="hint_username">Usuário</string>
+              <string name="hint_password">Senha</string>
+              <string name="hint_vnc_password">Senha VNC</string>
+              <string name="progress_downloading">Baixando os arquivos necessários…</string>
+              <string name="progress_setting_up_filesystem">Configurando o Linux…</string>
+              <string name="progress_starting">Iniciando…</string>
+              <string name="service_notification_title">PocketLinux</string>
+              <string name="service_notification_description">PocketLinux está executando um serviço Linux.</string>
+          </resources>""")
+
+          # Keep upstream GPL/COPYRIGHT notices in the produced source tree.
+          readme = root / "POCKETLINUX-NOTES.md"
+          readme.write_text("""# PocketLinux build
+          PocketLinux is a customized build of ProotX, licensed under GPL-3.0.
+          Upstream: https://github.com/Lord1Egypt/ProotX
+
+          Intended default use: Debian + XFCE for programming and lightweight Linux apps/games.
+          No root and no separate Termux installation are required by the app.
+          """)
+          PY
+
+      - name: Build debug APK
+        working-directory: PocketLinux
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon clean assembleDebug --stacktrace
+
+      - name: Prepare APK
+        run: |
+          mkdir -p out
+          cp PocketLinux/app/build/outputs/apk/debug/app-debug.apk out/PocketLinux-1.0.apk
+          cp PocketLinux/LICENSE out/LICENSE-GPLv3.txt
+          cp PocketLinux/COPYRIGHT out/COPYRIGHT.txt
+          cp PocketLinux/POCKETLINUX-NOTES.md out/SOURCE-AND-LICENSE.txt
+
+      - name: Upload PocketLinux APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketLinux-APK
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
