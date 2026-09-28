@@ -1,9 +1,6 @@
 name: Diagnose PocketLinux Android 13
 
 on:
-  push:
-    branches:
-      - linux-pocket-build
   workflow_dispatch:
 
 jobs:
