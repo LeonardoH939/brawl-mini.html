@@ -1,9 +1,6 @@
 name: Build PocketLinux APK
 
 on:
-  push:
-    branches:
-      - linux-pocket-build
   workflow_dispatch:
 
 jobs:
