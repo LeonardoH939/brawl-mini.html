@@ -1,0 +1,63 @@
+name: Build HyperDroid PC Launcher
+
+on:
+  push:
+    branches:
+      - hyperdroid-pc-launcher
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;24.0.8215888" "cmake;3.22.1"
+
+      - name: Fetch Winlator app source
+        run: |
+          git clone --depth=1 https://github.com/brunodev85/winlator-app.git HyperDroidPC
+
+      - name: Apply HyperDroid launcher layer
+        run: python3 .github/scripts/patch_hyperdroid_winlator.py
+
+      - name: Configure Android SDK
+        working-directory: HyperDroidPC
+        run: |
+          printf "sdk.dir=%s\nndk.dir=%s\n" "$ANDROID_HOME" "$ANDROID_HOME/ndk/24.0.8215888" > local.properties
+
+      - name: Build APK
+        working-directory: HyperDroidPC
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug --stacktrace
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p out
+          cp HyperDroidPC/app/build/outputs/apk/debug/app-debug.apk out/HyperDroid-PC-0.1-debug.apk
+          cp HyperDroidPC/LICENSE out/LICENSE-LGPL-2.1.txt
+          cp HyperDroidPC/HYPERDROID-NOTES.md out/HYPERDROID-NOTES.md
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HyperDroid-PC-0.1
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
