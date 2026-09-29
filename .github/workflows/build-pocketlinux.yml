@@ -1,0 +1,72 @@
+name: Build PocketLinux APK
+
+on:
+  push:
+    branches:
+      - linux-pocket-build
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17 for Android SDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK and compatible NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-29" "platforms;android-30" "build-tools;29.0.3" "build-tools;30.0.3" "ndk;20.1.5948944"
+
+      - name: Set up Java 8 for legacy Android build
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Fetch GPLv3 Linux runtime app
+        run: git clone --depth=1 https://github.com/Lord1Egypt/ProotX.git PocketLinux
+
+      - name: Apply PocketLinux fixes
+        run: python3 .github/scripts/patch_pocketlinux.py
+
+      - name: Configure legacy NDK
+        working-directory: PocketLinux
+        run: |
+          printf "sdk.dir=%s\nndk.dir=%s\n" "$ANDROID_HOME" "$ANDROID_HOME/ndk/20.1.5948944" > local.properties
+
+      - name: Build debug APK
+        working-directory: PocketLinux
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/20.1.5948944"
+          chmod +x gradlew
+          ./gradlew --no-daemon clean assembleDebug --stacktrace
+
+      - name: Prepare APK
+        run: |
+          mkdir -p out
+          cp PocketLinux/app/build/outputs/apk/debug/app-debug.apk out/PocketLinux-1.0.3-autosetup.apk
+          cp PocketLinux/LICENSE out/LICENSE-GPLv3.txt
+          cp PocketLinux/COPYRIGHT out/COPYRIGHT.txt
+          cp PocketLinux/POCKETLINUX-NOTES.md out/SOURCE-AND-LICENSE.txt
+
+      - name: Upload PocketLinux APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketLinux-APK-1.0.3-autosetup
+          path: out/
+          if-no-files-found: error
+          retention-days: 7

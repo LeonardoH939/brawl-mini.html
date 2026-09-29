@@ -1,0 +1,93 @@
+name: Diagnose PocketLinux Android 13
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Java 17 for SDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install SDK and NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-29" "platforms;android-30" "build-tools;29.0.3" "build-tools;30.0.3" "ndk;20.1.5948944"
+
+      - name: Java 8 for build
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Clone upstream
+        run: git clone --depth=1 https://github.com/Lord1Egypt/ProotX.git PocketLinux
+
+      - name: Apply fixes
+        run: python3 .github/scripts/patch_pocketlinux.py
+
+      - name: Configure legacy NDK
+        working-directory: PocketLinux
+        run: |
+          printf "sdk.dir=%s\nndk.dir=%s\n" "$ANDROID_HOME" "$ANDROID_HOME/ndk/20.1.5948944" > local.properties
+
+      - name: Build APK
+        working-directory: PocketLinux
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/20.1.5948944"
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - name: Java 17 for emulator
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Run on Android 13 and capture crash
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          arch: x86_64
+          target: default
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            mkdir -p diagnostics
+            adb install -r PocketLinux/app/build/outputs/apk/debug/app-debug.apk
+            adb logcat -c
+            adb shell am force-stop com.pocketlinux.mobile || true
+            adb shell monkey -p com.pocketlinux.mobile -c android.intent.category.LAUNCHER 1 || true
+            sleep 10
+            adb shell pidof com.pocketlinux.mobile > diagnostics/pid.txt || true
+            adb logcat -d -v threadtime > diagnostics/logcat-full.txt
+            grep -E -i "FATAL EXCEPTION|AndroidRuntime|com\.pocketlinux\.mobile|io\.github\.lord1egypt\.prootx|Process: " diagnostics/logcat-full.txt > diagnostics/crash.txt || true
+            echo "=== PID ==="
+            cat diagnostics/pid.txt || true
+            echo "=== CRASH ==="
+            cat diagnostics/crash.txt || true
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketLinux-Android13-Diagnostics
+          path: diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
