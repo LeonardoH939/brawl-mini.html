@@ -400,7 +400,7 @@ new_extract = r'''        val extractionResult = busyboxExecutor.executeProotCom
             listener = listener
         )
 
-        if (extractionResult is SuccessfulExecution && filesystem.distributionType.lowercase().contains("debian")) {
+        if (extractionResult is SuccessfulExecution && filesystem.distributionType.toLowerCase().contains("debian")) {
             listener("\nPocketLinux: iniciando configuracao automatica. Isso acontece apenas na primeira instalacao...\n")
             val setupResult = busyboxExecutor.executeProotCommand(
                 "/support/pocketlinuxBootstrap.sh",
