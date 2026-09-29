@@ -5,7 +5,7 @@ root = Path("PocketLinux")
 gradle = root / "app/build.gradle"
 txt = gradle.read_text()
 txt = txt.replace('applicationId "io.github.lord1egypt.prootx"', 'applicationId "com.pocketlinux.mobile"')
-txt = txt.replace('versionName "1.0.0"', 'versionName "1.0.3-autosetup"')
+txt = txt.replace('versionName "1.0.0"', 'versionName "1.0.4-networkfix"')
 gradle.write_text(txt)
 
 manifest = root / "app/src/main/AndroidManifest.xml"
@@ -136,11 +136,11 @@ pt.mkdir(parents=True, exist_ok=True)
     <string name="service_notification_description">PocketLinux está executando um serviço Linux.</string>
 </resources>""")
 
-(root / "POCKETLINUX-NOTES.md").write_text("""# PocketLinux 1.0.3 autosetup
+(root / "POCKETLINUX-NOTES.md").write_text("""# PocketLinux 1.0.4 networkfix
 Customized GPLv3 build of ProotX.
 Upstream: https://github.com/Lord1Egypt/ProotX
 
-Changes in 1.0.3 autosetup:
+Changes in 1.0.4 networkfix:
 - avoid Google Play Billing initialization in sideload/debug builds
 - Android 11+ storage permission compatibility
 - immutable PendingIntent flags for Android 12+
@@ -421,11 +421,11 @@ fm = fm.replace(old_extract, new_extract, 1)
 filesystem_manager.write_text(fm)
 
 notes = root / "POCKETLINUX-NOTES.md"
-notes.write_text("""# PocketLinux 1.0.3 autosetup
+notes.write_text("""# PocketLinux 1.0.4 networkfix
 Customized GPLv3 build of ProotX.
 Upstream: https://github.com/Lord1Egypt/ProotX
 
-Changes in 1.0.3:
+Changes in 1.0.4:
 - automatic Debian first-time setup; no manual apt commands required
 - installs programming tools, XFCE, Firefox ESR, multimedia and utility packages
 - uses /var/tmp/pocketlinux-apt instead of the Android cache for apt temporary files
@@ -436,3 +436,172 @@ Changes in 1.0.3:
 The Linux packages are downloaded during first environment creation rather than bundled
 inside the APK. This keeps the APK smaller and lets apt choose packages for the device architecture.
 """)
+
+
+# PocketLinux 1.0.4: tolerate transient mobile/GitHub connection resets.
+http_stream = root / "app/src/main/java/io/github/lord1egypt/prootx/utils/HttpStream.kt"
+http_stream.write_text(r'''package io.github.lord1egypt.prootx.utils
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.* // ktlint-disable no-wildcard-imports
+import java.net.HttpURLConnection
+import java.net.URL
+
+class HttpStream {
+    private fun openWithRetry(url: String): InputStream {
+        var lastError: IOException? = null
+        for (attempt in 1..5) {
+            try {
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.requestMethod = "GET"
+                conn.instanceFollowRedirects = true
+                conn.connectTimeout = 30000
+                conn.readTimeout = 90000
+                conn.setRequestProperty("User-Agent", "PocketLinux/1.0.4")
+                conn.setRequestProperty("Accept", "*/*")
+                val status = conn.responseCode
+                if (status !in 200..299) {
+                    conn.disconnect()
+                    throw IOException("HTTP $status while downloading $url")
+                }
+                return BufferedInputStream(conn.inputStream)
+            } catch (err: IOException) {
+                lastError = err
+                if (attempt < 5) {
+                    try {
+                        Thread.sleep((attempt * 1500L))
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw err
+                    }
+                }
+            }
+        }
+        throw lastError ?: IOException("Unable to download $url")
+    }
+
+    fun fromUrl(url: String): InputStream {
+        return openWithRetry(url)
+    }
+
+    @Throws(IOException::class)
+    suspend fun toLines(url: String): List<String> = withContext(Dispatchers.IO) {
+        val reader = BufferedReader(InputStreamReader(fromUrl(url)))
+        try {
+            return@withContext reader.readLines()
+        } finally {
+            reader.close()
+        }
+    }
+
+    @Throws(IOException::class)
+    suspend fun toFile(url: String, file: File) = withContext(Dispatchers.IO) {
+        file.parentFile!!.mkdirs()
+        val inputStream = fromUrl(url)
+        val outputStream = file.outputStream()
+        try {
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = inputStream.read(buffer)
+                if (count < 0) break
+                outputStream.write(buffer, 0, count)
+            }
+        } finally {
+            try { inputStream.close() } catch (_: Exception) {}
+            try { outputStream.close() } catch (_: Exception) {}
+        }
+    }
+
+    @Throws(IOException::class)
+    suspend fun toTextFile(url: String, file: File) = withContext(Dispatchers.IO) {
+        file.parentFile!!.mkdirs()
+        val reader = BufferedReader(InputStreamReader(fromUrl(url)))
+        try {
+            file.writeText(reader.readText())
+        } finally {
+            reader.close()
+        }
+    }
+}
+''')
+
+github_api = root / "app/src/main/java/io/github/lord1egypt/prootx/model/remote/GithubApiClient.kt"
+ga = github_api.read_text()
+ga = ga.replace(
+    "import java.net.UnknownHostException",
+    "import java.net.UnknownHostException\nimport java.util.concurrent.TimeUnit"
+)
+ga = ga.replace(
+    "    private val client = OkHttpClient()",
+    """    private val client = OkHttpClient.Builder()
+            .retryOnConnectionFailure(true)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
+            .writeTimeout(90, TimeUnit.SECONDS)
+            .build()"""
+)
+old_query = r'''        val response = try {
+            client.newCall(request).execute()
+        } catch (err: UnknownHostException) {
+            logger.addExceptionBreadcrumb(err)
+            throw err
+        }
+        if (!response.isSuccessful) {
+            val err = IOException("Unexpected code: $response")
+            logger.addExceptionBreadcrumb(err)
+            throw err
+        }
+
+        val result = adapter.fromJson(response.body()!!.source())!!
+        latestResults[repo] = result
+        return@withContext result'''
+new_query = r'''        var lastError: IOException? = null
+        for (attempt in 1..5) {
+            try {
+                val response = client.newCall(request).execute()
+                try {
+                    if (!response.isSuccessful) {
+                        throw IOException("Unexpected code: $response")
+                    }
+                    val body = response.body() ?: throw IOException("Empty response body")
+                    val result = adapter.fromJson(body.source()) ?: throw IOException("Invalid GitHub response")
+                    latestResults[repo] = result
+                    return@withContext result
+                } finally {
+                    response.close()
+                }
+            } catch (err: IOException) {
+                logger.addExceptionBreadcrumb(err)
+                lastError = err
+                if (attempt < 5) {
+                    try {
+                        Thread.sleep(attempt * 1500L)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw err
+                    }
+                }
+            }
+        }
+        throw lastError ?: IOException("GitHub request failed")'''
+if old_query not in ga:
+    raise RuntimeError("Could not patch GithubApiClient retry logic")
+ga = ga.replace(old_query, new_query, 1)
+github_api.write_text(ga)
+
+startup_fsm = root / "app/src/main/java/io/github/lord1egypt/prootx/model/state/SessionStartupFsm.kt"
+sf = startup_fsm.read_text()
+sf = sf.replace(
+    """        } catch (err: UnknownHostException) {
+            state.postValue(RemoteUnreachableForGeneration)
+            return
+        }""",
+    """        } catch (err: Exception) {
+            logger.addExceptionBreadcrumb(err)
+            state.postValue(RemoteUnreachableForGeneration)
+            return
+        }""",
+    1
+)
+startup_fsm.write_text(sf)
