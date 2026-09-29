@@ -5,7 +5,7 @@ root = Path("PocketLinux")
 gradle = root / "app/build.gradle"
 txt = gradle.read_text()
 txt = txt.replace('applicationId "io.github.lord1egypt.prootx"', 'applicationId "com.pocketlinux.mobile"')
-txt = txt.replace('versionName "1.0.0"', 'versionName "1.0.2-diagnostic"')
+txt = txt.replace('versionName "1.0.0"', 'versionName "1.0.3-autosetup"')
 gradle.write_text(txt)
 
 manifest = root / "app/src/main/AndroidManifest.xml"
@@ -136,11 +136,11 @@ pt.mkdir(parents=True, exist_ok=True)
     <string name="service_notification_description">PocketLinux está executando um serviço Linux.</string>
 </resources>""")
 
-(root / "POCKETLINUX-NOTES.md").write_text("""# PocketLinux 1.0.2 diagnostic
+(root / "POCKETLINUX-NOTES.md").write_text("""# PocketLinux 1.0.3 autosetup
 Customized GPLv3 build of ProotX.
 Upstream: https://github.com/Lord1Egypt/ProotX
 
-Changes in 1.0.2 diagnostic:
+Changes in 1.0.3 autosetup:
 - avoid Google Play Billing initialization in sideload/debug builds
 - Android 11+ storage permission compatibility
 - immutable PendingIntent flags for Android 12+
@@ -314,3 +314,127 @@ txt = txt.replace(
         </activity>'''
 )
 manifest.write_text(txt)
+
+
+# PocketLinux 1.0.3: automatic first-time Debian setup.
+# The packages are downloaded inside the Linux filesystem on first creation,
+# keeping the APK reasonably small while removing the need to type setup commands.
+filesystem_manager = root / "app/src/main/java/io/github/lord1egypt/prootx/utils/FilesystemManager.kt"
+fm = filesystem_manager.read_text()
+
+old_copy = r'''        files?.let {
+            for (file in files) {
+                if (file.name.contains("rootfs") && filesystem.isCreatedFromBackup) continue
+                val targetFile = File("${targetDirectory.absolutePath}/${file.name}")
+                file.copyTo(targetFile, overwrite = true)
+                prootxFiles.makePermissionsUsable(targetDirectory.absolutePath, file.name)
+            }
+        }
+    }
+
+    fun removeRootfsFilesFromFilesystem'''
+new_copy = r'''        files?.let {
+            for (file in files) {
+                if (file.name.contains("rootfs") && filesystem.isCreatedFromBackup) continue
+                val targetFile = File("${targetDirectory.absolutePath}/${file.name}")
+                file.copyTo(targetFile, overwrite = true)
+                prootxFiles.makePermissionsUsable(targetDirectory.absolutePath, file.name)
+            }
+        }
+
+        val setupScript = File(targetDirectory, "pocketlinuxBootstrap.sh")
+        setupScript.writeText("""#!/bin/sh
+MARKER=/var/lib/pocketlinux/.setup-v1-complete
+if [ -f "$MARKER" ]; then
+    echo "PocketLinux: configuracao inicial ja concluida."
+    exit 0
+fi
+
+echo "PocketLinux: preparando instalacao automatica..."
+mkdir -p /var/lib/pocketlinux /var/tmp/pocketlinux-apt
+chmod 1777 /var/tmp/pocketlinux-apt
+export TMPDIR=/var/tmp/pocketlinux-apt
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update || exit 20
+dpkg --configure -a || true
+apt-get -f install -y || true
+
+PACKAGES="ca-certificates curl wget git nano unzip zip p7zip-full gnupg htop file tree build-essential gcc g++ make cmake pkg-config gdb python3 python3-pip python3-venv python3-dev default-jdk nodejs npm xfce4 xfce4-goodies thunar mousepad xterm dbus-x11 firefox-esr ffmpeg vlc gimp ristretto file-roller mesa-utils libgl1-mesa-dri dosbox scummvm"
+
+echo "PocketLinux: instalando ambiente de programacao, desktop e aplicativos..."
+apt-get install -y $PACKAGES || {
+    echo "PocketLinux: primeira tentativa falhou; atualizando indices e tentando novamente..."
+    apt-get update || exit 21
+    apt-get install -y $PACKAGES || exit 22
+}
+
+apt-get autoremove -y || true
+apt-get autoclean || true
+touch "$MARKER"
+echo "PocketLinux: configuracao automatica concluida."
+exit 0
+""".trimIndent())
+        prootxFiles.makePermissionsUsable(targetDirectory.absolutePath, setupScript.name)
+    }
+
+    fun removeRootfsFilesFromFilesystem'''
+
+if old_copy not in fm:
+    raise RuntimeError("Could not patch copyAssetsToFilesystem for PocketLinux autosetup")
+fm = fm.replace(old_copy, new_copy, 1)
+
+old_extract = r'''        return@withContext busyboxExecutor.executeProotCommand(
+            command,
+            filesystemDirName,
+            commandShouldTerminate = true,
+            env = env,
+            listener = listener
+        )
+    }'''
+new_extract = r'''        val extractionResult = busyboxExecutor.executeProotCommand(
+            command,
+            filesystemDirName,
+            commandShouldTerminate = true,
+            env = env,
+            listener = listener
+        )
+
+        if (extractionResult is SuccessfulExecution && filesystem.distributionType.lowercase().contains("debian")) {
+            listener("\nPocketLinux: iniciando configuracao automatica. Isso acontece apenas na primeira instalacao...\n")
+            val setupResult = busyboxExecutor.executeProotCommand(
+                "/support/pocketlinuxBootstrap.sh",
+                filesystemDirName,
+                commandShouldTerminate = true,
+                env = env,
+                listener = listener
+            )
+            if (setupResult !is SuccessfulExecution) {
+                return@withContext setupResult
+            }
+        }
+
+        return@withContext extractionResult
+    }'''
+
+if old_extract not in fm:
+    raise RuntimeError("Could not patch extractFilesystem for PocketLinux autosetup")
+fm = fm.replace(old_extract, new_extract, 1)
+filesystem_manager.write_text(fm)
+
+notes = root / "POCKETLINUX-NOTES.md"
+notes.write_text("""# PocketLinux 1.0.3 autosetup
+Customized GPLv3 build of ProotX.
+Upstream: https://github.com/Lord1Egypt/ProotX
+
+Changes in 1.0.3:
+- automatic Debian first-time setup; no manual apt commands required
+- installs programming tools, XFCE, Firefox ESR, multimedia and utility packages
+- uses /var/tmp/pocketlinux-apt instead of the Android cache for apt temporary files
+- setup runs once and records /var/lib/pocketlinux/.setup-v1-complete
+- keeps Android 11+ storage, Android 12+ PendingIntent and sideload billing compatibility fixes
+- PocketLinux branding and Brazilian Portuguese essentials
+
+The Linux packages are downloaded during first environment creation rather than bundled
+inside the APK. This keeps the APK smaller and lets apt choose packages for the device architecture.
+""")
