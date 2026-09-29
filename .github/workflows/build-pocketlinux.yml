@@ -58,7 +58,7 @@ jobs:
       - name: Prepare APK
         run: |
           mkdir -p out
-          cp PocketLinux/app/build/outputs/apk/debug/app-debug.apk out/PocketLinux-1.0.2-diagnostic.apk
+          cp PocketLinux/app/build/outputs/apk/debug/app-debug.apk out/PocketLinux-1.0.3-autosetup.apk
           cp PocketLinux/LICENSE out/LICENSE-GPLv3.txt
           cp PocketLinux/COPYRIGHT out/COPYRIGHT.txt
           cp PocketLinux/POCKETLINUX-NOTES.md out/SOURCE-AND-LICENSE.txt
@@ -66,7 +66,7 @@ jobs:
       - name: Upload PocketLinux APK
         uses: actions/upload-artifact@v4
         with:
-          name: PocketLinux-APK-1.0.2-diagnostic
+          name: PocketLinux-APK-1.0.3-autosetup
           path: out/
           if-no-files-found: error
           retention-days: 7
